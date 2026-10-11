@@ -26,8 +26,13 @@
   #dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
   #dot.live { background: #4ade80; }
   #dot.wait { background: var(--accent); }
-  #title { font-weight: 800; font-size: 18px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #title small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
+  #title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; overflow: hidden; }
+  #chname { font-weight: 800; font-size: 18px; white-space: nowrap; }
+  #stats { display: flex; gap: 10px; font-size: 13px; color: var(--muted); white-space: nowrap;
+    font-variant-numeric: tabular-nums; overflow: hidden; }
+  #stats .v { color: var(--text); font-weight: 600; }
+  #stats .viewers { display: inline-flex; align-items: center; gap: 5px; color: #ff4d4d; font-weight: 700; }
+  #stats .viewers svg { width: 14px; height: 14px; flex: none; }
   button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line);
     border-radius: 10px; padding: 8px 12px; min-height: 40px; }
   button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -74,7 +79,7 @@
 <body>
 <header>
   <span id="dot" class="wait"></span>
-  <div id="title">chat</div>
+  <div id="title"><span id="chname">chat</span><span id="stats"></span></div>
   <button id="gear" aria-label="Settings" aria-expanded="false">Settings</button>
 </header>
 
@@ -95,7 +100,8 @@
   var MAX_MSGS = 200;
   var feed = document.getElementById("feed");
   var dot = document.getElementById("dot");
-  var titleEl = document.getElementById("title");
+  var chnameEl = document.getElementById("chname");
+  var statsEl = document.getElementById("stats");
   var jump = document.getElementById("jump");
   var panel = document.getElementById("panel");
   var chanInput = document.getElementById("chan");
@@ -130,6 +136,7 @@
     var c = chanInput.value.trim().replace(/^#/, "").toLowerCase();
     if (!c) return;
     channel = c; save("channel", c);
+    resetStats();
     feed.innerHTML = '<div id="empty">Connecting to chat…</div>';
     panel.classList.remove("open");
     connect();
@@ -336,8 +343,66 @@
   // ---- connection (anonymous, read-only) ----
   function setStatus(s) {
     dot.className = s === "live" ? "live" : s === "wait" ? "wait" : "";
-    titleEl.innerHTML = "#" + esc(channel) + "<small>" + (s === "live" ? "live chat" : s === "wait" ? "connecting" : "offline") + "</small>";
+    dot.title = s === "live" ? "Chat connected" : s === "wait" ? "Connecting" : "Disconnected";
+    chnameEl.textContent = "#" + channel;
   }
+
+  // ---- stream stats: viewer count + time live (refreshed every 45s, clock ticks each second) ----
+  var streamStart = null, viewers = 0, statsKnown = false;
+
+  function pad2(n) { return n < 10 ? "0" + n : "" + n; }
+
+  function fmtUptime(ms) {
+    var s = Math.max(0, Math.floor(ms / 1000));
+    return Math.floor(s / 3600) + ":" + pad2(Math.floor(s % 3600 / 60)) + ":" + pad2(s % 60);
+  }
+
+  function fmtCount(n) {
+    return n >= 10000 ? Math.round(n / 1000) + "K" : n >= 1000 ? (n / 1000).toFixed(1) + "K" : "" + n;
+  }
+
+  var PERSON_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="8" r="4.5"/><path d="M3.5 21c0-4.7 3.8-8 8.5-8s8.5 3.3 8.5 8z"/></svg>';
+
+  function renderStats() {
+    if (!statsKnown) { statsEl.textContent = ""; return; }
+    if (!streamStart) { statsEl.textContent = "offline"; return; }
+    statsEl.innerHTML = '<span class="viewers" title="Viewers" aria-label="' + viewers + ' viewers">' + PERSON_ICON + fmtCount(viewers) + "</span>" +
+      '<span><span class="v">' + fmtUptime(Date.now() - streamStart) + "</span> live</span>";
+  }
+
+  function fetchStats() {
+    var ch = channel;
+    fetch("https://gql.twitch.tv/gql", {
+      method: "POST",
+      headers: { "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: "query($l:String!){user(login:$l){stream{createdAt viewersCount}}}",
+        variables: { l: ch }
+      })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (ch !== channel) return;
+        var u = j && j.data && j.data.user;
+        if (!u) return;
+        if (u.stream) {
+          streamStart = new Date(u.stream.createdAt).getTime();
+          viewers = u.stream.viewersCount || 0;
+        } else {
+          streamStart = null;
+        }
+        statsKnown = true;
+        renderStats();
+      })
+      .catch(function () {});
+  }
+
+  function resetStats() {
+    streamStart = null; statsKnown = false; renderStats(); fetchStats();
+  }
+
+  setInterval(renderStats, 1000);
+  setInterval(fetchStats, 45000);
 
   function connect() {
     clearTimeout(retryTimer);
@@ -369,6 +434,7 @@
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState !== "visible") return;
     keepAwake();
+    fetchStats();
     if (!ws || ws.readyState > 1) connect();
   });
 
@@ -380,6 +446,7 @@
   keepAwake();
 
   loadGlobalBadges();
+  resetStats();
   connect();
 })();
 </script>
