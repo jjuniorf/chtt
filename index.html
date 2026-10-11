@@ -43,7 +43,7 @@
   #feed { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 8px 14px 14px; -webkit-overflow-scrolling: touch; }
   .msg { font-size: var(--size); line-height: 1.4; padding: 5px 0; overflow-wrap: anywhere; }
   .msg .name { font-weight: 800; }
-  .msg .mod { color: var(--accent); font-size: .8em; margin-right: 3px; }
+  .msg .badges img { height: 1.1em; margin: -.15em 3px 0 0; border-radius: 3px; vertical-align: middle; }
   .msg .colon { color: var(--muted); }
   .msg.action .body { font-style: italic; }
   .msg.sys { color: var(--muted); font-size: 14px; }
@@ -152,6 +152,63 @@
     return out + esc(chars.slice(i).join(""));
   }
 
+  // ---- badges (global + this channel's custom ones, fetched once) ----
+  var badgeSets = { global: null, rooms: {} };
+
+  function fetchJSON(url) {
+    return fetch(url).then(function (r) { if (!r.ok) throw new Error("bad"); return r.json(); });
+  }
+
+  function loadGlobalBadges() {
+    fetchJSON("https://badges.twitch.tv/v1/badges/global/display")
+      .then(function (j) { badgeSets.global = j.badge_sets; refillBadges(); })
+      .catch(function () {});
+  }
+
+  function loadRoomBadges(id) {
+    if (!id || id in badgeSets.rooms) return;
+    badgeSets.rooms[id] = null;
+    fetchJSON("https://badges.twitch.tv/v1/badges/channels/" + encodeURIComponent(id) + "/display")
+      .then(function (j) { badgeSets.rooms[id] = j.badge_sets; refillBadges(); })
+      .catch(function () {});
+  }
+
+  function findBadge(set, ver, room) {
+    var sources = [badgeSets.rooms[room], badgeSets.global];
+    for (var i = 0; i < sources.length; i++) {
+      var s = sources[i];
+      if (s && s[set] && s[set].versions && s[set].versions[ver]) return s[set].versions[ver];
+    }
+    // exact version missing (e.g. a sub month with no custom art): use the set's first version
+    for (var j = 0; j < sources.length; j++) {
+      var t = sources[j];
+      if (t && t[set] && t[set].versions) {
+        var keys = Object.keys(t[set].versions);
+        if (keys.length) return t[set].versions[keys[0]];
+      }
+    }
+    return null;
+  }
+
+  function fillBadges(el) {
+    var raw = el.getAttribute("data-b");
+    if (!raw) { el.setAttribute("data-done", "1"); return; }
+    var room = el.getAttribute("data-room"), html = "", all = true;
+    raw.split(",").forEach(function (b) {
+      var p = b.split("/");
+      var v = findBadge(p[0], p[1], room);
+      if (v) html += '<img src="' + esc(v.image_url_2x) + '" alt="' + esc(v.title || p[0]) + '" title="' + esc(v.title || p[0]) + '">';
+      else all = false;
+    });
+    el.innerHTML = html;
+    if (all && badgeSets.global && badgeSets.rooms[room]) el.setAttribute("data-done", "1");
+  }
+
+  function refillBadges() {
+    var els = feed.querySelectorAll(".badges:not([data-done])");
+    for (var i = 0; i < els.length; i++) fillBadges(els[i]);
+  }
+
   function hashColor(name) {
     var h = 0; for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
     return "hsl(" + h + ",70%,70%)";
@@ -198,15 +255,17 @@
 
     var name = tags["display-name"] || m[1];
     var color = tags["color"] || hashColor(name);
-    var isMod = /moderator|broadcaster/.test(tags["badges"] || "");
+    var room = tags["room-id"] || "";
+    loadRoomBadges(room);
 
     var d = document.createElement("div");
     d.className = "msg" + (action ? " action" : "");
     d.innerHTML =
-      (isMod ? '<span class="mod" title="Mod">&#9876;</span>' : "") +
+      '<span class="badges" data-b="' + esc(tags["badges"] || "") + '" data-room="' + esc(room) + '"></span>' +
       '<span class="name" style="color:' + esc(color) + '">' + esc(name) + "</span>" +
       (action ? " " : '<span class="colon">: </span>') +
       '<span class="body">' + renderBody(text, tags["emotes"]) + "</span>";
+    fillBadges(d.firstChild);
     push(d);
   }
 
@@ -255,6 +314,7 @@
   }
   keepAwake();
 
+  loadGlobalBadges();
   connect();
 })();
 </script>
