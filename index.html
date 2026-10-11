@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12141c">
+<title>Chat Only</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #12141c; --surface: #1b1f2b; --line: #2a2f3f;
+    --text: #e8e6df; --muted: #8a8fa3; --accent: #ffb454;
+    --size: 17px;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    background: var(--surface); border-bottom: 1px solid var(--line); }
+  #dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+  #dot.live { background: #4ade80; }
+  #dot.wait { background: var(--accent); }
+  #title { font-weight: 800; font-size: 18px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #title small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
+  button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 12px; min-height: 40px; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  #panel { display: none; padding: 14px; background: var(--surface); border-bottom: 1px solid var(--line); gap: 14px; flex-direction: column; }
+  #panel.open { display: flex; }
+  #panel label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 15px; }
+  #panel input[type=text] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 12px; width: 150px; }
+  #panel input[type=range] { width: 150px; accent-color: var(--accent); }
+  #panel input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+
+  #feed { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 8px 14px 14px; -webkit-overflow-scrolling: touch; }
+  .msg { font-size: var(--size); line-height: 1.4; padding: 5px 0; overflow-wrap: anywhere; }
+  .msg .name { font-weight: 800; }
+  .msg .mod { color: var(--accent); font-size: .8em; margin-right: 3px; }
+  .msg .colon { color: var(--muted); }
+  .msg.action .body { font-style: italic; }
+  .msg.sys { color: var(--muted); font-size: 14px; }
+  .msg img { height: 1.7em; vertical-align: middle; margin: -.2em 1px; }
+
+  #jump { position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px)); display: none;
+    background: var(--accent); color: #1a1205; border: 0; font-weight: 800; padding: 10px 18px; border-radius: 999px; }
+  #jump.show { display: block; }
+  #empty { color: var(--muted); padding: 30px 6px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <span id="dot" class="wait"></span>
+  <div id="title">chat</div>
+  <button id="gear" aria-label="Settings" aria-expanded="false">Settings</button>
+</header>
+
+<section id="panel">
+  <label>Channel <input id="chan" type="text" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+  <label>Text size <input id="size" type="range" min="13" max="30" step="1"></label>
+  <label>Hide !commands <input id="nocmd" type="checkbox"></label>
+  <button id="apply">Switch channel</button>
+</section>
+
+<main id="feed"><div id="empty">Connecting to chat…</div></main>
+<button id="jump">New messages ↓</button>
+
+<script>
+(function () {
+  var DEFAULT_CHANNEL = "djkyii";
+  var MAX_MSGS = 200;
+  var feed = document.getElementById("feed");
+  var dot = document.getElementById("dot");
+  var titleEl = document.getElementById("title");
+  var jump = document.getElementById("jump");
+  var panel = document.getElementById("panel");
+  var chanInput = document.getElementById("chan");
+  var sizeInput = document.getElementById("size");
+  var nocmd = document.getElementById("nocmd");
+
+  var channel = DEFAULT_CHANNEL, ws = null, retry = 0, retryTimer = null, stuck = true;
+
+  // ---- settings (storage can fail, so every access is guarded) ----
+  function load(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }
+  function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  channel = load("channel", DEFAULT_CHANNEL);
+  sizeInput.value = load("size", "17");
+  nocmd.checked = load("nocmd", "0") === "1";
+  chanInput.value = channel;
+  document.documentElement.style.setProperty("--size", sizeInput.value + "px");
+
+  sizeInput.oninput = function () {
+    document.documentElement.style.setProperty("--size", sizeInput.value + "px");
+    save("size", sizeInput.value);
+  };
+  nocmd.onchange = function () { save("nocmd", nocmd.checked ? "1" : "0"); };
+  document.getElementById("gear").onclick = function () {
+    var open = panel.classList.toggle("open");
+    this.setAttribute("aria-expanded", open);
+  };
+  document.getElementById("apply").onclick = function () {
+    var c = chanInput.value.trim().replace(/^#/, "").toLowerCase();
+    if (!c) return;
+    channel = c; save("channel", c);
+    feed.innerHTML = '<div id="empty">Connecting to chat…</div>';
+    panel.classList.remove("open");
+    connect();
+  };
+
+  // ---- scrolling ----
+  function atBottom() { return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60; }
+  function toBottom() { feed.scrollTop = feed.scrollHeight; stuck = true; jump.classList.remove("show"); }
+  feed.addEventListener("scroll", function () {
+    stuck = atBottom();
+    if (stuck) jump.classList.remove("show");
+  }, { passive: true });
+  jump.onclick = toBottom;
+
+  // ---- rendering ----
+  function esc(s) { return s.replace(/[&<>"']/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+
+  function renderBody(text, emotesTag) {
+    var chars = Array.from(text);
+    var spans = [];
+    if (emotesTag) {
+      emotesTag.split("/").forEach(function (grp) {
+        var p = grp.split(":"); if (p.length < 2) return;
+        p[1].split(",").forEach(function (r) {
+          var se = r.split("-");
+          spans.push({ id: p[0], s: +se[0], e: +se[1] });
+        });
+      });
+      spans.sort(function (a, b) { return a.s - b.s; });
+    }
+    var out = "", i = 0;
+    spans.forEach(function (sp) {
+      if (sp.s < i) return;
+      out += esc(chars.slice(i, sp.s).join(""));
+      var url = "https://static-cdn.jtvnw.net/emoticons/v2/" + sp.id + "/default/dark/2.0";
+      out += '<img src="' + url + '" alt="' + esc(chars.slice(sp.s, sp.e + 1).join("")) + '" loading="lazy">';
+      i = sp.e + 1;
+    });
+    return out + esc(chars.slice(i).join(""));
+  }
+
+  function hashColor(name) {
+    var h = 0; for (var i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) % 360;
+    return "hsl(" + h + ",70%,70%)";
+  }
+
+  function addSys(text) {
+    var d = document.createElement("div");
+    d.className = "msg sys"; d.textContent = text;
+    push(d);
+  }
+
+  function push(node) {
+    var empty = document.getElementById("empty"); if (empty) empty.remove();
+    feed.appendChild(node);
+    while (feed.children.length > MAX_MSGS) feed.removeChild(feed.firstChild);
+    if (stuck) toBottom(); else jump.classList.add("show");
+  }
+
+  function parseTags(raw) {
+    var t = {};
+    raw.slice(1).split(";").forEach(function (kv) {
+      var i = kv.indexOf("="); t[kv.slice(0, i)] = kv.slice(i + 1);
+    });
+    return t;
+  }
+
+  function handleLine(line) {
+    if (line.indexOf("PING") === 0) { ws.send("PONG :tmi.twitch.tv"); return; }
+    var tags = {};
+    if (line[0] === "@") {
+      var sp = line.indexOf(" ");
+      tags = parseTags(line.slice(0, sp));
+      line = line.slice(sp + 1);
+    }
+    if (line.indexOf("PRIVMSG") === -1) {
+      if (/ 366 /.test(line)) { setStatus("live"); addSys("Connected to #" + channel); }
+      return;
+    }
+    var m = line.match(/^:([^!]+)![^ ]+ PRIVMSG #[^ ]+ :(.*)$/);
+    if (!m) return;
+    var text = m[2], action = false;
+    if (text.indexOf("\u0001ACTION ") === 0) { action = true; text = text.replace(/^\u0001ACTION /, "").replace(/\u0001$/, ""); }
+    if (nocmd.checked && text[0] === "!") return;
+
+    var name = tags["display-name"] || m[1];
+    var color = tags["color"] || hashColor(name);
+    var isMod = /moderator|broadcaster/.test(tags["badges"] || "");
+
+    var d = document.createElement("div");
+    d.className = "msg" + (action ? " action" : "");
+    d.innerHTML =
+      (isMod ? '<span class="mod" title="Mod">&#9876;</span>' : "") +
+      '<span class="name" style="color:' + esc(color) + '">' + esc(name) + "</span>" +
+      (action ? " " : '<span class="colon">: </span>') +
+      '<span class="body">' + renderBody(text, tags["emotes"]) + "</span>";
+    push(d);
+  }
+
+  // ---- connection (anonymous, read-only) ----
+  function setStatus(s) {
+    dot.className = s === "live" ? "live" : s === "wait" ? "wait" : "";
+    titleEl.innerHTML = "#" + esc(channel) + "<small>" + (s === "live" ? "live chat" : s === "wait" ? "connecting" : "offline") + "</small>";
+  }
+
+  function connect() {
+    clearTimeout(retryTimer);
+    if (ws) { ws.onclose = null; try { ws.close(); } catch (e) {} }
+    setStatus("wait");
+    ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
+    ws.onopen = function () {
+      retry = 0;
+      ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands");
+      ws.send("PASS SCHMOOPIIE");
+      ws.send("NICK justinfan" + Math.floor(10000 + Math.random() * 80000));
+      ws.send("JOIN #" + channel);
+    };
+    ws.onmessage = function (ev) {
+      ev.data.split("\r\n").forEach(function (l) { if (l) handleLine(l); });
+    };
+    ws.onclose = function () {
+      setStatus("off");
+      retry++;
+      var wait = Math.min(15000, 1000 * retry);
+      addSys("Disconnected. Retrying in " + Math.round(wait / 1000) + "s…");
+      retryTimer = setTimeout(connect, wait);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+
+  // reconnect fast when the phone wakes up
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState !== "visible") return;
+    keepAwake();
+    if (!ws || ws.readyState > 1) connect();
+  });
+
+  // keep the screen on so chat stays visible
+  var lock = null;
+  function keepAwake() {
+    try { if (navigator.wakeLock) navigator.wakeLock.request("screen").then(function (l) { lock = l; }).catch(function () {}); } catch (e) {}
+  }
+  keepAwake();
+
+  connect();
+})();
+</script>
+</body>
+</html>
