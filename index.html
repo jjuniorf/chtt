@@ -52,10 +52,11 @@
   #plat button.on { background: var(--accent); border-color: var(--accent); color: #1a1205; font-weight: 800; }
   #kickwrap { display: none; flex: 1; min-height: 0; position: relative; overflow: hidden; }
   body.kick #kickwrap { display: block; }
-  #kickframe { position: absolute; top: 0; left: 0; width: 100%; height: calc(100% + var(--kcrop, 0px));
+  #kickframe { position: absolute; top: calc(0px - var(--ktop, 0px)); left: 0; width: 100%;
+    height: calc(100% + var(--kcrop, 0px) + var(--ktop, 0px));
     border: 0; background: var(--bg); }
-  #panel label#croprow { display: none; }
-  body.kick #panel label#croprow { display: flex; }
+  #panel label#croprow, #panel label#toprow { display: none; }
+  body.kick #panel label#croprow, body.kick #panel label#toprow { display: flex; }
   body.kick #feed, body.kick #jump { display: none; }
   #stats .kicktag { color: #53fc18; font-weight: 700; }
 
@@ -103,6 +104,7 @@
   <div id="plat" role="group" aria-label="Platform"><button data-p="twitch">Twitch</button><button data-p="kick">Kick</button></div>
   <label><span id="chanlabel">Channel</span> <input id="chan" type="text" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
   <label>Text size <input id="size" type="range" min="13" max="30" step="1"></label>
+  <label id="toprow">Hide Kick top bar <input id="topcrop" type="range" min="0" max="320" step="5"></label>
   <label id="croprow">Hide Kick message box <input id="crop" type="range" min="0" max="250" step="5"></label>
   <label>Hide !commands <input id="nocmd" type="checkbox"></label>
   <button id="apply">Apply</button>
@@ -131,6 +133,7 @@
   var chanLabel = document.getElementById("chanlabel");
   var kickFrame = document.getElementById("kickframe");
   var cropInput = document.getElementById("crop");
+  var topInput = document.getElementById("topcrop");
   var platBtns = Array.prototype.slice.call(document.querySelectorAll("#plat button"));
 
   var channel = DEFAULT_CHANNEL, ws = null, retry = 0, retryTimer = null, stuck = true, manualOff = false;
@@ -158,12 +161,16 @@
   // Kick's chat window is another site, so we can't edit it; instead the frame is made taller than its
   // box and the bottom (where the message input sits) is clipped off.
   cropInput.value = load("crop", "110");
+  topInput.value = load("topcrop", "60");
   function applyCrop() {
-    document.documentElement.style.setProperty("--kcrop", cropInput.value + "px");
+    var root = document.documentElement.style;
+    root.setProperty("--kcrop", cropInput.value + "px");
+    root.setProperty("--ktop", topInput.value + "px");
     save("crop", cropInput.value);
+    save("topcrop", topInput.value);
   }
-  cropInput.oninput = applyCrop;
-  document.documentElement.style.setProperty("--kcrop", cropInput.value + "px");
+  cropInput.oninput = topInput.oninput = applyCrop;
+  applyCrop();
   discBtn.onclick = function () {
     if (!manualOff) {
       manualOff = true;
