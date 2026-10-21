@@ -55,6 +55,7 @@
   #kickframe { position: absolute; top: calc(0px - var(--ktop, 0px)); left: 0; width: 100%;
     height: calc(100% + var(--kcrop, 0px) + var(--ktop, 0px));
     border: 0; background: var(--bg); }
+  #panel b { font-weight: 600; color: var(--accent); margin-left: 4px; }
   #panel label#croprow, #panel label#toprow { display: none; }
   body.kick #panel label#croprow, body.kick #panel label#toprow { display: flex; }
   body.kick #feed, body.kick #jump { display: none; }
@@ -104,8 +105,8 @@
   <div id="plat" role="group" aria-label="Platform"><button data-p="twitch">Twitch</button><button data-p="kick">Kick</button></div>
   <label><span id="chanlabel">Channel</span> <input id="chan" type="text" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
   <label>Text size <input id="size" type="range" min="13" max="30" step="1"></label>
-  <label id="toprow">Hide Kick top bar <input id="topcrop" type="range" min="0" max="320" step="5"></label>
-  <label id="croprow">Hide Kick message box <input id="crop" type="range" min="0" max="250" step="5"></label>
+  <label id="toprow"><span>Hide Kick top bar <b id="topval"></b></span> <input id="topcrop" type="range" min="0" max="320" step="5"></label>
+  <label id="croprow"><span>Hide Kick message box <b id="cropval"></b></span> <input id="crop" type="range" min="0" max="250" step="5"></label>
   <label>Hide !commands <input id="nocmd" type="checkbox"></label>
   <button id="apply">Apply</button>
   <button id="disc">Disconnect</button>
@@ -161,13 +162,15 @@
   // Kick's chat window is another site, so we can't edit it; instead the frame is made taller than its
   // box and the bottom (where the message input sits) is clipped off.
   cropInput.value = load("crop", "110");
-  topInput.value = load("topcrop", "60");
+  topInput.value = load("topcrop2", "100");
   function applyCrop() {
     var root = document.documentElement.style;
     root.setProperty("--kcrop", cropInput.value + "px");
     root.setProperty("--ktop", topInput.value + "px");
+    document.getElementById("cropval").textContent = cropInput.value;
+    document.getElementById("topval").textContent = topInput.value;
     save("crop", cropInput.value);
-    save("topcrop", topInput.value);
+    save("topcrop2", topInput.value);
   }
   cropInput.oninput = topInput.oninput = applyCrop;
   applyCrop();
