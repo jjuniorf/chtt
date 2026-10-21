@@ -161,7 +161,7 @@
 
   // Kick's chat window is another site, so we can't edit it; instead the frame is made taller than its
   // box and the bottom (where the message input sits) is clipped off.
-  cropInput.value = load("crop", "110");
+  cropInput.value = load("crop2", "95");
   topInput.value = load("topcrop2", "100");
   function applyCrop() {
     var root = document.documentElement.style;
@@ -169,7 +169,7 @@
     root.setProperty("--ktop", topInput.value + "px");
     document.getElementById("cropval").textContent = cropInput.value;
     document.getElementById("topval").textContent = topInput.value;
-    save("crop", cropInput.value);
+    save("crop2", cropInput.value);
     save("topcrop2", topInput.value);
   }
   cropInput.oninput = topInput.oninput = applyCrop;
