@@ -23,12 +23,14 @@
 
   header { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     background: var(--surface); border-bottom: 1px solid var(--line); }
-  #dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
-  #dot.live { background: #4ade80; }
-  #dot.wait { background: var(--accent); }
-  #title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; overflow: hidden; }
-  #chname { font-weight: 800; font-size: 18px; white-space: nowrap; }
-  #stats { display: flex; gap: 12px; font-size: 16px; color: var(--muted); white-space: nowrap;
+  #dot { width: 22px; height: 22px; flex: none; display: flex; color: var(--muted); }
+  #dot svg { width: 100%; height: 100%; fill: currentColor; }
+  #dot.wait { color: var(--accent); }
+  #dot.live.twitch { color: #9146ff; }
+  #dot.live.kick { color: #53fc18; }
+  #title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; overflow: hidden; }
+  #chname { font-weight: 800; font-size: 18px; line-height: 1.2; white-space: nowrap; }
+  #stats { display: flex; align-items: center; gap: 12px; line-height: 1.2; font-size: 16px; color: var(--muted); white-space: nowrap;
     font-variant-numeric: tabular-nums; overflow: hidden; }
   #stats .v { color: var(--text); font-weight: 600; }
   #stats .viewers { display: inline-flex; align-items: center; gap: 5px; color: #ff4d4d; font-weight: 700; }
@@ -45,11 +47,24 @@
     border-radius: 10px; padding: 9px 12px; width: 150px; }
   #panel input[type=range] { width: 150px; accent-color: var(--accent); }
   #panel input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+  #plat { display: flex; gap: 8px; }
+  #plat button { flex: 1; }
+  #plat button.on { background: var(--accent); border-color: var(--accent); color: #1a1205; font-weight: 800; }
+  #kickwrap { display: none; flex: 1; min-height: 0; position: relative; overflow: hidden; }
+  body.kick #kickwrap { display: block; }
+  #kickframe { position: absolute; top: 0; left: 0; width: 100%; height: calc(100% + var(--kcrop, 0px));
+    border: 0; background: var(--bg); }
+  #panel label#croprow { display: none; }
+  body.kick #panel label#croprow { display: flex; }
+  body.kick #feed, body.kick #jump { display: none; }
+  #stats .kicktag { color: #53fc18; font-weight: 700; }
 
   #feed { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 8px 14px 14px; -webkit-overflow-scrolling: touch; }
   .msg { font-size: var(--size); line-height: 1.4; padding: 5px 0; overflow-wrap: anywhere; }
   .msg .name { font-weight: 800; }
   .msg .badges img { height: 1.1em; margin: -.15em 3px 0 0; border-radius: 3px; vertical-align: middle; }
+  .msg .badges .sword { display: inline-block; width: 1.15em; height: 1.15em; margin: -.15em 3px 0 0;
+    vertical-align: middle; color: #4ade80; }
   .msg .colon { color: var(--muted); }
   .msg.action .body { font-style: italic; }
   .msg.sys { color: var(--muted); font-size: 14px; }
@@ -85,14 +100,17 @@
 </header>
 
 <section id="panel">
-  <label>Channel <input id="chan" type="text" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+  <div id="plat" role="group" aria-label="Platform"><button data-p="twitch">Twitch</button><button data-p="kick">Kick</button></div>
+  <label><span id="chanlabel">Channel</span> <input id="chan" type="text" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
   <label>Text size <input id="size" type="range" min="13" max="30" step="1"></label>
-  <label>Highlight words <input id="words" type="text" placeholder="nickname, other" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+  <label id="croprow">Hide Kick message box <input id="crop" type="range" min="0" max="250" step="5"></label>
   <label>Hide !commands <input id="nocmd" type="checkbox"></label>
-  <button id="apply">Switch channel</button>
+  <button id="apply">Apply</button>
+  <button id="disc">Disconnect</button>
 </section>
 
 <main id="feed"><div id="empty">Connecting to chat…</div></main>
+<div id="kickwrap"><iframe id="kickframe" title="Kick chat"></iframe></div>
 <button id="jump">New messages ↓</button>
 
 <script>
@@ -108,19 +126,27 @@
   var chanInput = document.getElementById("chan");
   var sizeInput = document.getElementById("size");
   var nocmd = document.getElementById("nocmd");
-  var wordsInput = document.getElementById("words");
+  var discBtn = document.getElementById("disc");
+  var applyBtn = document.getElementById("apply");
+  var chanLabel = document.getElementById("chanlabel");
+  var kickFrame = document.getElementById("kickframe");
+  var cropInput = document.getElementById("crop");
+  var platBtns = Array.prototype.slice.call(document.querySelectorAll("#plat button"));
 
-  var channel = DEFAULT_CHANNEL, ws = null, retry = 0, retryTimer = null, stuck = true;
+  var channel = DEFAULT_CHANNEL, ws = null, retry = 0, retryTimer = null, stuck = true, manualOff = false;
+  var platform = "twitch", pendingPlat = "twitch", twitchName = DEFAULT_CHANNEL, kickName = "";
 
   // ---- settings (storage can fail, so every access is guarded) ----
   function load(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }
   function save(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
-  channel = load("channel", DEFAULT_CHANNEL);
+  twitchName = load("channel", DEFAULT_CHANNEL);
+  kickName = load("kickname", "");
+  platform = pendingPlat = load("platform", "twitch") === "kick" ? "kick" : "twitch";
+  channel = platform === "kick" ? kickName : twitchName;
   sizeInput.value = load("size", "17");
   nocmd.checked = load("nocmd", "0") === "1";
-  wordsInput.value = load("words", "");
-  chanInput.value = channel;
+  refreshPanel();
   document.documentElement.style.setProperty("--size", sizeInput.value + "px");
 
   sizeInput.oninput = function () {
@@ -128,20 +154,78 @@
     save("size", sizeInput.value);
   };
   nocmd.onchange = function () { save("nocmd", nocmd.checked ? "1" : "0"); };
-  wordsInput.oninput = function () { save("words", wordsInput.value); buildMentionRe(); };
+
+  // Kick's chat window is another site, so we can't edit it; instead the frame is made taller than its
+  // box and the bottom (where the message input sits) is clipped off.
+  cropInput.value = load("crop", "110");
+  function applyCrop() {
+    document.documentElement.style.setProperty("--kcrop", cropInput.value + "px");
+    save("crop", cropInput.value);
+  }
+  cropInput.oninput = applyCrop;
+  document.documentElement.style.setProperty("--kcrop", cropInput.value + "px");
+  discBtn.onclick = function () {
+    if (!manualOff) {
+      manualOff = true;
+      clearTimeout(retryTimer);
+      if (ws) { ws.onclose = null; try { ws.close(); } catch (e) {} }
+      kickFrame.removeAttribute("src");
+      document.body.classList.remove("kick");
+      setStatus("off");
+      addSys("Disconnected. Open the menu and tap Reconnect to resume.");
+      discBtn.textContent = "Reconnect";
+    } else {
+      connect();
+    }
+    panel.classList.remove("open");
+    document.getElementById("gear").setAttribute("aria-expanded", "false");
+  };
   document.getElementById("gear").onclick = function () {
     var open = panel.classList.toggle("open");
     this.setAttribute("aria-expanded", open);
   };
-  document.getElementById("apply").onclick = function () {
-    var c = chanInput.value.trim().replace(/^#/, "").toLowerCase();
-    if (!c) return;
-    channel = c; save("channel", c);
+  function refreshPanel() {
+    var kick = pendingPlat === "kick";
+    platBtns.forEach(function (b) { b.classList.toggle("on", b.getAttribute("data-p") === pendingPlat); });
+    chanLabel.textContent = kick ? "Kick username" : "Channel";
+    chanInput.value = kick ? kickName : twitchName;
+  }
+
+  function applyError(msg) {
+    applyBtn.textContent = msg;
+    setTimeout(function () { applyBtn.textContent = "Apply"; }, 3000);
+  }
+
+  function applySettings() {
+    var c = chanInput.value.trim().replace(/^[#@]/, "");
+    if (pendingPlat === "kick") {
+      if (!c) { applyError("Enter your Kick username"); return; }
+      kickName = c;
+      save("kickname", c);
+      channel = c;
+    } else {
+      c = c.toLowerCase();
+      if (!c) return;
+      twitchName = c; save("channel", c);
+      channel = c;
+    }
+    platform = pendingPlat; save("platform", platform);
     resetStats();
     feed.innerHTML = '<div id="empty">Connecting to chat…</div>';
     panel.classList.remove("open");
+    document.getElementById("gear").setAttribute("aria-expanded", "false");
     connect();
-  };
+  }
+
+  platBtns.forEach(function (b) {
+    b.onclick = function () {
+      pendingPlat = b.getAttribute("data-p");
+      refreshPanel();
+      var ready = pendingPlat === "twitch" ? !!twitchName : !!kickName;
+      if (pendingPlat !== platform && ready) applySettings();
+    };
+  });
+  applyBtn.onclick = applySettings;
 
   // ---- scrolling ----
   function atBottom() { return feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60; }
@@ -217,12 +301,15 @@
     return null;
   }
 
+  var SWORD_ICON = '<svg class="sword" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Moderator"><title>Moderator</title><polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/><line x1="13" x2="19" y1="19" y2="13"/><line x1="16" x2="20" y1="16" y2="20"/><line x1="19" x2="21" y1="21" y2="19"/></svg>';
+
   function fillBadges(el) {
     var raw = el.getAttribute("data-b");
     if (!raw) { el.setAttribute("data-done", "1"); return; }
     var room = el.getAttribute("data-room"), html = "", all = true;
     raw.split(",").forEach(function (b) {
       var p = b.split("/");
+      if (p[0] === "moderator") { html += SWORD_ICON; return; }
       var v = findBadge(p[0], p[1], room);
       if (v) html += '<img src="' + esc(v.image_url_2x) + '" alt="' + esc(v.title || p[0]) + '" title="' + esc(v.title || p[0]) + '">';
       else all = false;
@@ -240,9 +327,7 @@
   var mentionRe = null;
 
   function buildMentionRe() {
-    var list = [channel].concat(wordsInput.value.split(","))
-      .map(function (w) { return w.trim().replace(/^@/, "").toLowerCase(); })
-      .filter(function (w, i, a) { return w && a.indexOf(w) === i; });
+    var list = [channel.toLowerCase()].filter(Boolean);
     mentionRe = list.length
       ? new RegExp("(^|[^a-z0-9_])@?(" + list.map(function (w) { return w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + ")(?![a-z0-9_])", "i")
       : null;
@@ -342,14 +427,18 @@
   }
 
   // ---- connection (anonymous, read-only) ----
+  var TWITCH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.43l-3 3v-3H6.857V1.714h13.714Z"/></svg>';
+  var KICK_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1.333 0h8v5.333H12V2.667h2.667V0h8v8H20v2.667h-2.667v2.666H20V16h2.667v8h-8v-2.667H12v-2.666H9.333V24h-8Z"/></svg>';
+
   function setStatus(s) {
-    dot.className = s === "live" ? "live" : s === "wait" ? "wait" : "";
+    dot.className = (s === "live" ? "live " : s === "wait" ? "wait " : "") + platform;
+    dot.innerHTML = platform === "kick" ? KICK_ICON : TWITCH_ICON;
     dot.title = s === "live" ? "Chat connected" : s === "wait" ? "Connecting" : "Disconnected";
-    chnameEl.textContent = "#" + channel;
+    chnameEl.textContent = platform === "kick" ? (channel || "Kick") : "#" + channel;
   }
 
   // ---- stream stats: viewer count + time live (refreshed every 45s, clock ticks each second) ----
-  var streamStart = null, viewers = 0, statsKnown = false;
+  var streamStart = null, viewers = 0, statsKnown = false, liveNoClock = false;
 
   function pad2(n) { return n < 10 ? "0" + n : "" + n; }
 
@@ -365,13 +454,36 @@
   var PERSON_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="8" r="4.5"/><path d="M3.5 21c0-4.7 3.8-8 8.5-8s8.5 3.3 8.5 8z"/></svg>';
 
   function renderStats() {
-    if (!statsKnown) { statsEl.textContent = ""; return; }
-    if (!streamStart) { statsEl.textContent = "offline"; return; }
+    if (!statsKnown) { statsEl.innerHTML = platform === "kick" ? '<span class="kicktag">Kick</span>' : ""; return; }
+    if (!streamStart && !liveNoClock) { statsEl.textContent = "offline"; return; }
     statsEl.innerHTML = '<span class="viewers" title="Viewers" aria-label="' + viewers + ' viewers">' + PERSON_ICON + fmtCount(viewers) + "</span>" +
-      '<span><span class="v">' + fmtUptime(Date.now() - streamStart) + "</span> live</span>";
+      (streamStart ? '<span><span class="v">' + fmtUptime(Date.now() - streamStart) + "</span> live</span>" : "");
+  }
+
+  // Kick: unofficial public channel info. If Kick blocks this request the header just keeps the "Kick" tag.
+  function fetchKickStats() {
+    var ch = channel, slug = ch.toLowerCase().replace(/_/g, "-");
+    fetch("https://kick.com/api/v2/channels/" + encodeURIComponent(slug), { headers: { Accept: "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("bad"); return r.json(); })
+      .then(function (j) {
+        if (platform !== "kick" || ch !== channel) return;
+        var ls = j && j.livestream;
+        streamStart = null; liveNoClock = false;
+        if (ls) {
+          var t = String(ls.start_time || ls.created_at || "");
+          if (t && !/[zZ]$|[+-]\d\d:?\d\d$/.test(t)) t = t.replace(" ", "T") + "Z";
+          var ms = Date.parse(t);
+          if (isNaN(ms)) liveNoClock = true; else streamStart = ms;
+          viewers = ls.viewer_count != null ? ls.viewer_count : (ls.viewers || 0);
+        }
+        statsKnown = true;
+        renderStats();
+      })
+      .catch(function () {});
   }
 
   function fetchStats() {
+    if (platform === "kick") { fetchKickStats(); return; }
     var ch = channel;
     fetch("https://gql.twitch.tv/gql", {
       method: "POST",
@@ -399,7 +511,7 @@
   }
 
   function resetStats() {
-    streamStart = null; statsKnown = false; renderStats(); fetchStats();
+    streamStart = null; liveNoClock = false; statsKnown = false; renderStats(); fetchStats();
   }
 
   setInterval(renderStats, 1000);
@@ -407,8 +519,20 @@
 
   function connect() {
     clearTimeout(retryTimer);
+    manualOff = false;
+    discBtn.textContent = "Disconnect";
     buildMentionRe();
     if (ws) { ws.onclose = null; try { ws.close(); } catch (e) {} }
+    if (platform === "kick" && !channel) { platform = "twitch"; channel = twitchName; }
+    if (platform === "kick") {
+      // Kick doesn't allow outside pages to read its chat feed, so show Kick's own chat window
+      document.body.classList.add("kick");
+      kickFrame.src = "https://kick.com/popout/" + encodeURIComponent(channel) + "/chat";
+      setStatus("live");
+      return;
+    }
+    document.body.classList.remove("kick");
+    kickFrame.removeAttribute("src");
     setStatus("wait");
     ws = new WebSocket("wss://irc-ws.chat.twitch.tv:443");
     ws.onopen = function () {
@@ -436,7 +560,7 @@
     if (document.visibilityState !== "visible") return;
     keepAwake();
     fetchStats();
-    if (!ws || ws.readyState > 1) connect();
+    if (!manualOff && platform !== "kick" && (!ws || ws.readyState > 1)) connect();
   });
 
   // keep the screen on so chat stays visible
